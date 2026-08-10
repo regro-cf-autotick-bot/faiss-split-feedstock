@@ -322,9 +322,6 @@ outputs:
             - faiss
           pip_check: true
       - files:
-          recipe:
-            - test-pkg.bat
-            - test-pkg.sh
           source:
             - tests/
         requirements:
@@ -332,17 +329,83 @@ outputs:
             - scipy
             - pytest
         script:
+          interpreter: python
           # { if microarch_level|default(1)|int < 4 and (not (aarch64 or ppc64le) or py == 311) }
           # only run the full test suite for one python version when in emulation
           # (each run can take up to 5h!); there's essentially zero divergence
           # in behaviour across python versions anyway
           # { endif }
-          - if: match(python, "==3.11") and unix and not ppc64le
-            then: ./test-pkg.sh
-          - if: match(python, "==3.11") and win
-            then: test-pkg.bat
-          # running the following test requires an actual GPU device, which is not available in CI
-          # - pytest faiss/gpu/test/
+          content:
+            - if: (match(python, "==3.11") and ((unix and not ppc64le) or win))
+              then:
+              - import pytest
+              - from numpy._core._multiarray_umath import __cpu_features__
+              - print(f'Testing version with AVX2-support - ' + str(__cpu_features__['AVX2']))
+              - 'tests_to_skip = "_not_a_real_test"'
+              # flaky double encoding test that occasionally fails
+              - 'tests_to_skip += " or test_RQ6x8"'
+              # TestComputeGT switches between CPU & GPU implementation depending on availability;
+              # GPU device detection (on win) currently seems broken in CUDA, and segfaults the test suite
+              - if: win
+                then:
+                  - 'tests_to_skip += " or TestComputeGT"'
+                  # test relies on linux-isms
+                  - 'tests_to_skip += " or test_RQ6x8"'
+                  - 'tests_to_skip += " or (test_contrib and test_checkpoint)"'
+              - if: osx
+                then:
+                  # marginal tolerance violation
+                  - 'tests_to_skip += " or (TestProductLocalSearchQuantizer and test_lut)"'
+              # two failing tests on aarch and win (test_index_accuracy & test_index_accuracy2)
+              - if: aarch64 or ppc64le or win
+                then: 'tests_to_skip += " or (test_residual_quantizer and test_index_accuracy)"'
+              - if: win
+                then: 'tests_to_skip += " or (test_local_search_quantizer and test_index_accuracy2)"'
+              # test errors on aarch (probably due to emulation)
+              - if: aarch64
+                then:
+                  - 'tests_to_skip += " or (TestPCA and test_pca)"'
+                  - 'tests_to_skip += " or test_PQ4_speed"'
+                  - 'tests_to_skip += " or test_update_codebooks"'
+              # a test run in emulation takes ~2.5h on the fastest agents,
+              # and over 5h on a slow one; we need to skip some of the
+              # longest-running tests to have a chance of finishing
+              - if: aarch64 or ppc64le
+                then:
+                  # test modules that may take 2h or more on a slow agent
+                  - 'tests_to_skip += " or test_index_accuracy.py"'
+                  - 'tests_to_skip += " or test_fast_scan.py"'
+                  # other really slow tests
+                  - 'tests_to_skip += " or (test_merge_index.py and TestMerge1)"'
+                  - 'tests_to_skip += " or (test_meta_index.py and IDRemap)"'
+                  - 'tests_to_skip += " or (TestClone and AdditiveQuantizer)"'
+                  - 'tests_to_skip += " or (TestIndexProduct and test_accuracy1)"'
+                  - 'tests_to_skip += " or test_wrapped_quantizer_HNSW"'
+              # Failing tests on NumPy 2: TestPreassigned::test_float,
+              # TestClustering::test_ivf_train_2level, OPQRelativeAccuracy::test_OIVFPQ and
+              # TestComponents::test_update_codebooks_with_double. Remove after faiss>=1.13.0
+              # https://github.com/facebookresearch/faiss/pull/4523
+              - 'tests_to_skip += " or test_float"'
+              - if: linux or win
+                then: 'tests_to_skip += " or test_ivf_train_2level"'
+              - if: linux
+                then: 'tests_to_skip += " or test_update_codebooks_with_double"'
+              # GPU-only tests abort on CUDA builds without a usable GPU
+              - if: cuda_compiler_version != "None"
+                then:
+                  - 'tests_to_skip += " or TestComputeGT"'
+                  - 'tests_to_skip += " or test_wheel_smoke_gpu.py"'
+              # Segfaults on Windows + MKL + no CUDA builds
+              - if: win
+                then: 'tests_to_skip += " or (TestReconstructBatch and test_exception)"'
+              # the linux & windows CI agents support AVX2 (OSX doesn't yet), so by default,
+              # we expect faiss will load the library with AVX2-support, see
+              # https://github.com/facebookresearch/faiss/blob/v1.7.1/faiss/python/loader.py#L52-L66
+              - 'args = ["--log-file-level=INFO", "--log-file=log.txt", "-k", f"not ({tests_to_skip})", "--durations=50"]'
+              - 'print(f"running pytest with args: {args}")'
+              - 'pytest.main(args)'
+              # running the following test requires an actual GPU device, which is not available in CI
+              # - pytest faiss/gpu/test/
 
   # for compatibility with (& ease of migration from) existing packages in the pytorch channel
   - package:
@@ -351,7 +414,7 @@ outputs:
       skip: cuda_compiler_version != "None"
     requirements:
       run:
-        - faiss ${{ version }}.* *_cpu
+        - faiss ==${{ version }} [build=cpu*]
     tests:
       - python:
           imports:
@@ -363,7 +426,7 @@ outputs:
       skip: cuda_compiler_version == "None"
     requirements:
       run:
-        - faiss ${{ version }}.* *_cuda
+        - faiss ==${{ version }} [build=cuda*]
     tests:
       - python:
           imports:
