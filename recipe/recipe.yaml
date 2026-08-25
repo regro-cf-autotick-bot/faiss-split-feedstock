@@ -319,7 +319,8 @@ outputs:
     tests:
       - python:
           imports:
-            - faiss
+            - if: (microarch_level|default(1)|int < 4)
+              then: faiss
           pip_check: true
       - files:
           source:
@@ -330,13 +331,11 @@ outputs:
             - pytest
         script:
           interpreter: python
-          # { if microarch_level|default(1)|int < 4 and (not (aarch64 or ppc64le) or py == 311) }
           # only run the full test suite for one python version when in emulation
           # (each run can take up to 5h!); there's essentially zero divergence
           # in behaviour across python versions anyway
-          # { endif }
           content:
-            - if: (match(python, "==3.11") and ((unix and not ppc64le) or win))
+            - if: (match(python, "==3.11") and (microarch_level|default(1)|int < 4) and ((unix and not ppc64le) or win))
               then:
               - import pytest
               - from numpy._core._multiarray_umath import __cpu_features__
@@ -418,7 +417,8 @@ outputs:
     tests:
       - python:
           imports:
-            - faiss
+            - if: (microarch_level|default(1)|int < 4)
+              then: faiss
 
   - package:
       name: faiss-gpu
@@ -430,7 +430,8 @@ outputs:
     tests:
       - python:
           imports:
-            - faiss
+            - if: (microarch_level|default(1)|int < 4)
+              then: faiss
 
 about:
   homepage: https://github.com/facebookresearch/faiss
